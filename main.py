@@ -249,6 +249,7 @@ async def start_handler(client, message):
     welcome_text = (
         "🎬 **Welcome to Moviesaibbot!**\n\n"
         "Press the search button below to find and stream movies instantly.\n"
+        "✨ *Clean • No ADs • No Buffering • HQ 4K Support*\n\n"
         "🎁 *Enjoy a 90-Day Unlimited Free Trial!*\n\n"
         "👑 **Bot Owner:** AAKASH👑"
     )
@@ -403,8 +404,13 @@ async def cb_handler(client, query):
         watch_url = f"{STREAM_BASE_URL}{imdb_id}"
         
         try:
+            caption = (
+                f"🎥 **{movie['title']}**\n\n"
+                f"✨ **Clean • No ADs • No Buffering • HQ 4K Support**\n\n"
+                f"🍿 Click the button below to start streaming!"
+            )
             await query.message.edit_media(
-                media=InputMediaPhoto(media=movie["poster"], caption=f"🎥 **{movie['title']}**"),
+                media=InputMediaPhoto(media=movie["poster"], caption=caption),
                 reply_markup=InlineKeyboardMarkup([
                     [InlineKeyboardButton("🍿 Watch In-App", web_app=WebAppInfo(url=watch_url))],
                     [InlineKeyboardButton("🔙 Close Menu", callback_data="close")]
