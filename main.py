@@ -57,6 +57,7 @@ STREAM_BASE_URL = "https://streamimdb.ru/embed/movie/"
 DEFAULT_POSTER = "https://images.unsplash.com/photo-1536440136628-849c177e76a1?q=80&w=1000"
 MOVIE_DATA = {}
 users_db = None
+USER_STATE = {} # Tracks if user clicked search
 
 # =========================================================
 # DATABASE
@@ -212,6 +213,8 @@ async def contact_admin(client, message):
 @app.on_message(filters.command("start") & filters.private)
 async def start_handler(client, message):
     user_id = message.from_user.id
+    USER_STATE[user_id] = None # Reset state
+    
     if await check_banned(user_id): return await message.reply_text("🚫 You are banned from using this bot.")
     if not await is_subscribed(client, user_id): return await send_fsub_msg(message)
 
@@ -274,11 +277,13 @@ async def handle_text(client, message):
         await client.send_message(OWNER_ID, admin_msg)
         return await message.reply_text("✅ Your message has been sent to the admins. We will respond soon.")
 
-    # --- MENU BUTTONS ---
-    if text == "🔍 Search Movie":
+    # --- MENU BUTTONS (USING 'in' TO FIX EMOJI MISMATCH BUG) ---
+    if "Search Movie" in text:
+        USER_STATE[user_id] = "SEARCHING"
         return await message.reply_text("🍿 **Please type the movie name and send it to me:**", reply_markup=ForceReply(selective=True))
         
-    elif text == "📊 My Stats":
+    elif "My Stats" in text:
+        USER_STATE[user_id] = None
         if users_db is None: return await message.reply_text("❌ Database is offline.")
         u = await users_db.find_one({"_id": user_id})
         if u:
@@ -306,17 +311,21 @@ async def handle_text(client, message):
             )
             return await message.reply_text(stats_msg)
             
-    elif text == "🎁 Referral Link":
+    elif "Referral Link" in text:
+        USER_STATE[user_id] = None
         me = await client.get_me()
         return await message.reply_text(f"🎁 **Your Referral Link:**\n`https://t.me/{me.username}?start={user_id}`\n\nInvite your friends and earn **10 Credits** for each join!")
         
-    elif text == "🎧 Support":
-        return await message.reply_text(f"📞 You can contact support via {SUPPORT_LINK} or by sending a message starting with `@admin` or `/admin`.")
+    elif "Support" in text:
+        USER_STATE[user_id] = None
+        return await message.reply_text(f"📞 You can contact support via {SUPPORT_LINK} or by sending a message starting with `@admin ` or `/admin `.")
         
-    elif text == "📢 Updates Channel":
+    elif "Updates Channel" in text:
+        USER_STATE[user_id] = None
         return await message.reply_text(f"Join our official channel: {FSUB_CHANNEL_LINK}")
 
-    elif text == "👑 Owner Panel" and await is_admin(user_id):
+    elif "Owner Panel" in text and await is_admin(user_id):
+        USER_STATE[user_id] = None
         admin_text = (
             "👑 **Owner & Admin Panel**\n"
             "Welcome back, **AAKASH👑**!\n\n"
@@ -331,8 +340,9 @@ async def handle_text(client, message):
         )
         return await message.reply_text(admin_text)
 
-    # --- SEARCH HANDLING (Triggered by ForceReply) ---
-    if message.reply_to_message and message.reply_to_message.text and "Please type the movie name" in message.reply_to_message.text:
+    # --- SEARCH HANDLING (Triggered by state OR ForceReply) ---
+    elif USER_STATE.get(user_id) == "SEARCHING" or (message.reply_to_message and message.reply_to_message.text and "Please type the movie name" in message.reply_to_message.text):
+        USER_STATE[user_id] = None # Reset state immediately
         movie_name = text
         status = await message.reply_text("🔍 Searching IMDb...")
         query = urllib.parse.quote(movie_name.lower().replace(" ", "_"))
@@ -362,6 +372,7 @@ async def handle_text(client, message):
         await status.delete()
 
     else:
+        # Fallback for completely random text
         await message.reply_text("👇 Please click the **🔍 Search Movie** button below to search!")
 
 # =========================================================
