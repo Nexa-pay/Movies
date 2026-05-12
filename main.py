@@ -1,8 +1,20 @@
-import os
 import asyncio
+import os
+import logging
+
+# =========================================================
+# THE "RENDER & PYTHON 3.11+" EVENT LOOP FIX
+# This MUST stay at the very top, before importing Pyrogram
+# =========================================================
+try:
+    asyncio.get_event_loop()
+except RuntimeError:
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
+
+# Now we can safely import everything else
 import urllib.parse
 import aiohttp
-import logging
 from aiohttp import web
 from pyrogram import Client, filters, enums, idle
 from pyrogram.types import (
@@ -58,6 +70,7 @@ async def keep_alive():
     runner = web.AppRunner(server)
     await runner.setup()
     await web.TCPSite(runner, "0.0.0.0", PORT).start()
+    logger.info(f"✅ Port {PORT} bound successfully")
 
 # --- UTILS ---
 async def is_subscribed(client, user_id):
@@ -79,7 +92,6 @@ async def start_handler(client, message):
     user_id = message.from_user.id
     if not await is_subscribed(client, user_id): return await send_fsub_msg(message)
 
-    # Referral & DB Logic
     if users_db is not None:
         try:
             ref_id = int(message.command[1]) if len(message.command) > 1 and message.command[1].isdigit() else None
@@ -92,7 +104,6 @@ async def start_handler(client, message):
                     except: pass
         except Exception as e: logger.error(f"Start DB Error: {e}")
 
-    # Menu Keyboard (Buttons at bottom)
     kb = [[KeyboardButton("🔍 Search Movie")], [KeyboardButton("📊 My Stats"), KeyboardButton("🎁 Referral Link")]]
     if SUPPORT_LINK: kb.append([KeyboardButton("🎧 Support")])
     
@@ -108,7 +119,6 @@ async def handle_text(client, message):
     user_id = message.from_user.id
     if not await is_subscribed(client, user_id): return await send_fsub_msg(message)
 
-    # Handle Menu Buttons
     if message.text == "🔍 Search Movie":
         return await message.reply_text("🍿 **Send me a movie name!**")
     elif message.text == "📊 My Stats" and users_db:
@@ -120,7 +130,6 @@ async def handle_text(client, message):
     elif message.text == "🎧 Support":
         return await message.reply_text(f"📞 Contact: {SUPPORT_LINK}")
 
-    # Search Logic
     status = await message.reply_text("🔍 Searching...")
     query = urllib.parse.quote(message.text.lower().strip().replace(" ", "_"))
     url = f"https://v3.sg.media-imdb.com/suggestion/{query[0]}/{query}.json"
@@ -169,12 +178,17 @@ async def cb_handler(client, query):
     elif data == "close": await query.message.delete()
 
 # --- STARTUP ---
-async def main():
+async def start_bot():
     await keep_alive()
     await init_db()
-    # Drop backlog
-    async with aiohttp.ClientSession() as s:
-        await s.get(f"https://api.telegram.org/bot{BOT_TOKEN}/deleteWebhook?drop_pending_updates=true")
+    
+    # Drop backlog safely
+    try:
+        url = f"https://api.telegram.org/bot{BOT_TOKEN}/deleteWebhook?drop_pending_updates=true"
+        async with aiohttp.ClientSession() as s:
+            await s.get(url)
+    except:
+        pass
     
     logger.info("🚀 Bot Starting...")
     await app.start()
@@ -184,4 +198,4 @@ async def main():
     await app.stop()
 
 if __name__ == "__main__":
-    asyncio.get_event_loop().run_until_complete(main())
+    asyncio.get_event_loop().run_until_complete(start_bot())
