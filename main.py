@@ -127,6 +127,7 @@ async def watch_movie(request):
 async def keep_alive():
     server = web.Application()
     server.router.add_get("/", lambda r: web.Response(text="Bot is Running!"))
+    # FIX: Correctly formatted the route string to single brackets
     server.router.add_get("/watch/{imdb_id}", watch_movie)
     runner = web.AppRunner(server)
     await runner.setup()
