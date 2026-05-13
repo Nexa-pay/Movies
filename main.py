@@ -6,7 +6,6 @@ from datetime import datetime, timedelta
 
 # =========================================================
 # THE "RENDER & PYTHON 3.11+" EVENT LOOP FIX
-# MUST BE EXECUTED BEFORE IMPORTING PYROGRAM OR AIOHTTP!
 # =========================================================
 try:
     asyncio.get_event_loop()
@@ -25,7 +24,8 @@ from pyrogram.types import (
     InlineKeyboardButton, 
     InputMediaPhoto, 
     BotCommand,
-    ForceReply
+    ForceReply,
+    WebAppInfo
 )
 from pyrogram.errors import UserNotParticipant, FloodWait
 
@@ -67,13 +67,29 @@ async def init_db():
             logger.error(f"❌ DB Error: {e}")
 
 # =========================================================
-# SECURE PROXY PLAYER (iOS Fix + Monetag + Rotation)
+# SECURE PROXY PLAYER & WEB SERVER
 # =========================================================
+async def index_page(request):
+    # This is the root page (/). Monetag scans here for verification!
+    html = """
+    <!DOCTYPE html>
+    <html>
+    <head>
+        <meta name="monetag" content="aef11068ac212ba3c9a82e845215d8a9">
+        <title>Moviesaibbot Status</title>
+    </head>
+    <body>
+        <h1>✅ Bot is Online and Verified!</h1>
+    </body>
+    </html>
+    """
+    return web.Response(text=html, content_type="text/html")
+
 async def watch_movie(request):
     imdb_id = request.match_info.get("imdb_id")
     movie_url = f"{STREAM_BASE_URL}{imdb_id}"
     
-    # We use .replace() instead of f-strings so Python doesn't crash on CSS/JS brackets
+    # iOS Fix: Removed restrictive sandbox, added Apple web-app tags
     html_content = """
     <!DOCTYPE html>
     <html lang="en">
@@ -81,6 +97,8 @@ async def watch_movie(request):
         <meta name="monetag" content="aef11068ac212ba3c9a82e845215d8a9">
         <meta charset="UTF-8">
         <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+        <meta name="apple-mobile-web-app-capable" content="yes">
+        <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
         <title>AAKASH👑 Player</title>
         <style>
             body, html { margin: 0; padding: 0; height: 100%; background-color: #000; overflow: hidden; font-family: sans-serif; }
@@ -105,7 +123,6 @@ async def watch_movie(request):
             <iframe 
                 id="video-iframe"
                 src="REPLACE_ME_URL" 
-                sandbox="allow-forms allow-scripts allow-pointer-lock allow-same-origin allow-top-navigation"
                 allow="autoplay; fullscreen; encrypted-media; picture-in-picture" 
                 allowfullscreen 
                 playsinline>
@@ -128,7 +145,7 @@ async def watch_movie(request):
 
 async def keep_alive():
     server = web.Application()
-    server.router.add_get("/", lambda r: web.Response(text="Bot is Running!"))
+    server.router.add_get("/", index_page)
     server.router.add_get("/watch/{imdb_id}", watch_movie)
     runner = web.AppRunner(server)
     await runner.setup()
@@ -467,12 +484,13 @@ async def cb_handler(client, query):
             caption = (
                 f"🎥 **{movie['title']}**\n\n"
                 f"✨ **Clean • No ADs • No Buffering • HQ 4K Support**\n\n"
-                f"🍿 Click the button below to start streaming!"
+                f"🍿 Select a viewing option below!"
             )
             await query.message.edit_media(
                 media=InputMediaPhoto(media=movie["poster"], caption=caption),
                 reply_markup=InlineKeyboardMarkup([
-                    [InlineKeyboardButton("🍿 Watch Movie", url=watch_url)],
+                    [InlineKeyboardButton("🌐 Watch in Browser (Best for iOS)", url=watch_url)],
+                    [InlineKeyboardButton("📱 Watch In-App", web_app=WebAppInfo(url=watch_url))],
                     [InlineKeyboardButton("🔙 Close Menu", callback_data="close")]
                 ])
             )
@@ -487,19 +505,20 @@ async def cb_handler(client, query):
 async def start_bot():
     await keep_alive()
     await init_db()
-    try:
-        url = f"https://api.telegram.org/bot{BOT_TOKEN}/deleteWebhook?drop_pending_updates=true"
-        async with aiohttp.ClientSession() as s: await s.get(url)
-    except: pass
     
-    logger.info("🚀 Pyrogram Client Starting...")
-    await app.start()
-    try: await app.set_bot_commands([BotCommand("start", "Show Main Menu")])
-    except: pass
-        
-    logger.info("✅ Bot is Online and Ready!")
-    await idle()
-    await app.stop()
+    try:
+        async with aiohttp.ClientSession() as s: 
+            await s.get(f"https://api.telegram.org/bot{BOT_TOKEN}/deleteWebhook?drop_pending_updates=true")
+    except Exception as e:
+        logger.warning(f"Webhook deletion skipped (Network timeout): {e}")
+
+    try:
+        await app.start()
+        await app.set_bot_commands([BotCommand("start", "Main Menu")])
+        logger.info("✅ Bot is Online and Ready!")
+        await idle()
+    except Exception as e:
+        logger.error(f"❌ Critical Error starting Pyrogram: {e}")
 
 if __name__ == "__main__":
     asyncio.get_event_loop().run_until_complete(start_bot())
