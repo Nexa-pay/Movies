@@ -21,6 +21,7 @@ from pyrogram.types import (
     KeyboardButton, 
     InlineKeyboardMarkup, 
     InlineKeyboardButton, 
+    WebAppInfo, 
     InputMediaPhoto, 
     BotCommand,
     ForceReply
@@ -48,6 +49,9 @@ FSUB_CHANNEL_ID = os.environ.get("FSUB_CHANNEL_ID", "").strip()
 FSUB_CHANNEL_LINK = os.environ.get("FSUB_CHANNEL_LINK", "").strip()
 SUPPORT_LINK = os.environ.get("SUPPORT_LINK", "").strip()
 
+# Your Render URL to hide the streaming link
+BASE_URL = os.environ.get("BASE_URL", "").strip().rstrip("/")
+
 # =========================================================
 # INITIALIZE
 # =========================================================
@@ -56,7 +60,7 @@ STREAM_BASE_URL = "https://streamimdb.ru/embed/movie/"
 DEFAULT_POSTER = "https://images.unsplash.com/photo-1536440136628-849c177e76a1?q=80&w=1000"
 MOVIE_DATA = {}
 users_db = None
-USER_STATE = {} # Tracks if user clicked search
+USER_STATE = {}
 
 # =========================================================
 # DATABASE
@@ -72,15 +76,42 @@ async def init_db():
             logger.error(f"❌ DB Error: {e}")
 
 # =========================================================
-# WEB SERVER (For Render Health Check)
+# SECURE PROXY WEB SERVER
 # =========================================================
 async def keep_alive():
     server = web.Application()
+    
+    # 1. Health Check
     server.router.add_get("/", lambda r: web.Response(text="Bot is Running!"))
+    
+    # 2. Secure Iframe Player (Hides the real link)
+    async def watch_movie(request):
+        imdb_id = request.match_info.get("imdb_id")
+        html_content = f"""
+        <!DOCTYPE html>
+        <html lang="en">
+        <head>
+            <meta charset="UTF-8">
+            <meta name="viewport" content="width=device-width, initial-scale=1.0">
+            <title>Watch Movie</title>
+            <style>
+                body, html {{ margin: 0; padding: 0; height: 100%; background-color: #000; overflow: hidden; }}
+                iframe {{ width: 100%; height: 100%; border: none; }}
+            </style>
+        </head>
+        <body>
+            <iframe src="{STREAM_BASE_URL}{imdb_id}" allow="autoplay; fullscreen" allowfullscreen="true" webkitallowfullscreen="true" mozallowfullscreen="true"></iframe>
+        </body>
+        </html>
+        """
+        return web.Response(text=html_content, content_type="text/html")
+
+    server.router.add_get("/watch/{imdb_id}", watch_movie)
+    
     runner = web.AppRunner(server)
     await runner.setup()
     await web.TCPSite(runner, "0.0.0.0", PORT).start()
-    logger.info(f"✅ Port {PORT} bound successfully")
+    logger.info(f"✅ Web Server & Secure Player running on port {PORT}")
 
 # =========================================================
 # UTILS & PERMISSIONS
@@ -175,7 +206,6 @@ async def reply_cmd(client, message):
     except Exception as e:
         await message.reply_text(f"❌ Failed to send: {e}")
 
-# --- OWNER ONLY ---
 @app.on_message(filters.command("addadmin") & filters.private & filters.user(OWNER_ID))
 async def addadmin_cmd(client, message):
     args = message.text.split()
@@ -207,12 +237,12 @@ async def contact_admin(client, message):
     await message.reply_text("✅ Your message has been sent to the admins. We will respond soon.")
 
 # =========================================================
-# START COMMAND & DB INITIALIZATION
+# START COMMAND
 # =========================================================
 @app.on_message(filters.command("start") & filters.private)
 async def start_handler(client, message):
     user_id = message.from_user.id
-    USER_STATE[user_id] = None # Reset state
+    USER_STATE[user_id] = None 
     
     if await check_banned(user_id): return await message.reply_text("🚫 You are banned from using this bot.")
     if not await is_subscribed(client, user_id): return await send_fsub_msg(message)
@@ -222,7 +252,6 @@ async def start_handler(client, message):
             ref_id = int(message.command[1]) if len(message.command) > 1 and message.command[1].isdigit() else None
             user = await users_db.find_one({"_id": user_id})
             if not user:
-                # Give new users 90 days free and 0 initial credits
                 await users_db.insert_one({
                     "_id": user_id, 
                     "referrals": 0, 
@@ -233,7 +262,6 @@ async def start_handler(client, message):
                     "is_banned": False,
                     "is_admin": False
                 })
-                # Reward referrer with 10 credits
                 if ref_id and ref_id != user_id:
                     await users_db.update_one({"_id": ref_id}, {"$inc": {"referrals": 1, "credits": 10}})
                     try: await client.send_message(ref_id, "🎊 **Someone joined using your link! You earned 10 Credits!**")
@@ -269,14 +297,12 @@ async def handle_text(client, message):
 
     text = message.text.strip()
 
-    # --- CONTACT ADMIN SHORTCUT ---
     if text.startswith("@admin "):
         msg_content = text.split("@admin ", 1)[1]
         admin_msg = f"📩 **New Support Ticket**\n👤 **User:** {message.from_user.mention}\n🆔 **ID:** `{user_id}`\n\n💬 **Message:** {msg_content}\n\n*Reply with: `/reply {user_id} YourMessage`*"
         await client.send_message(OWNER_ID, admin_msg)
         return await message.reply_text("✅ Your message has been sent to the admins. We will respond soon.")
 
-    # --- MENU BUTTONS (USING 'in' TO FIX EMOJI MISMATCH BUG) ---
     if "Search Movie" in text:
         USER_STATE[user_id] = "SEARCHING"
         return await message.reply_text("🍿 **Please type the movie name and send it to me:**", reply_markup=ForceReply(selective=True))
@@ -339,9 +365,9 @@ async def handle_text(client, message):
         )
         return await message.reply_text(admin_text)
 
-    # --- SEARCH HANDLING (Triggered by state OR ForceReply) ---
+    # --- SEARCH TRIGGER ---
     elif USER_STATE.get(user_id) == "SEARCHING" or (message.reply_to_message and message.reply_to_message.text and "Please type the movie name" in message.reply_to_message.text):
-        USER_STATE[user_id] = None # Reset state immediately
+        USER_STATE[user_id] = None 
         movie_name = text
         status = await message.reply_text("🔍 Searching IMDb...")
         query = urllib.parse.quote(movie_name.lower().replace(" ", "_"))
@@ -371,11 +397,10 @@ async def handle_text(client, message):
         await status.delete()
 
     else:
-        # Fallback for completely random text
         await message.reply_text("👇 Please click the **🔍 Search Movie** button below to search!")
 
 # =========================================================
-# CALLBACK HANDLERS (Movie Streaming & Credit Checks)
+# CALLBACK HANDLERS
 # =========================================================
 @app.on_callback_query()
 async def cb_handler(client, query):
@@ -391,7 +416,6 @@ async def cb_handler(client, query):
     if not await is_subscribed(client, user_id): return await send_fsub_msg(query.message)
 
     if data.startswith("play_"):
-        # --- CREDIT & TRIAL VERIFICATION ---
         if users_db is not None and not await is_admin(user_id):
             user = await users_db.find_one({"_id": user_id})
             if user:
@@ -399,7 +423,6 @@ async def cb_handler(client, query):
                 credits = user.get("credits", 0)
                 trial_end = join_date + timedelta(days=90)
                 
-                # If trial is expired, check and deduct credits
                 if datetime.utcnow() > trial_end:
                     if credits < 1:
                         return await query.answer("❌ Your 90-Day Free Trial has expired and you have 0 Credits. Invite friends to earn more!", show_alert=True)
@@ -411,7 +434,12 @@ async def cb_handler(client, query):
         await query.answer("Fetching Movie...") 
         imdb_id = data.split("_")[1]
         movie = MOVIE_DATA.get(imdb_id, {"title": "Unknown", "poster": DEFAULT_POSTER})
-        watch_url = f"{STREAM_BASE_URL}{imdb_id}"
+        
+        # Determine Watch URL based on if BASE_URL is set
+        if BASE_URL:
+            watch_url = f"{BASE_URL}/watch/{imdb_id}"
+        else:
+            watch_url = f"{STREAM_BASE_URL}{imdb_id}"
         
         try:
             caption = (
@@ -422,7 +450,6 @@ async def cb_handler(client, query):
             await query.message.edit_media(
                 media=InputMediaPhoto(media=movie["poster"], caption=caption),
                 reply_markup=InlineKeyboardMarkup([
-                    # Using a standard URL instead of web_app to ensure maximum compatibility!
                     [InlineKeyboardButton("🍿 Watch Movie", url=watch_url)],
                     [InlineKeyboardButton("🔙 Close Menu", callback_data="close")]
                 ])
