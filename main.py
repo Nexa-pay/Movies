@@ -47,7 +47,7 @@ SUPPORT_LINK = os.environ.get("SUPPORT_LINK", "").strip()
 BASE_URL = os.environ.get("BASE_URL", "").strip().rstrip("/")
 
 # =========================================================
-# INITIALIZE
+# INITIALIZE & SPAM PROTECTION
 # =========================================================
 app = Client("Moviesaibbot", api_id=API_ID, api_hash=API_HASH, bot_token=BOT_TOKEN, in_memory=True)
 STREAM_BASE_URL = "https://streamimdb.ru/embed/movie/"
@@ -55,6 +55,10 @@ DEFAULT_POSTER = "https://images.unsplash.com/photo-1536440136628-849c177e76a1?q
 MOVIE_DATA = {}
 users_db = None
 USER_STATE = {}
+
+# Anti-Spam Variables
+LAST_SEARCH_TIME = {}
+SEARCH_COOLDOWN = 5  # Seconds to wait between searches
 
 async def init_db():
     global users_db
@@ -67,7 +71,7 @@ async def init_db():
             logger.error(f"❌ DB Error: {e}")
 
 # =========================================================
-# SECURE PROXY PLAYER & WEB SERVER
+# SECURE PROXY PLAYER & WEB SERVER (Vertical Layout + Ads)
 # =========================================================
 async def index_page(request):
     # This is the root page (/). Monetag scans here for verification!
@@ -89,7 +93,7 @@ async def watch_movie(request):
     imdb_id = request.match_info.get("imdb_id")
     movie_url = f"{STREAM_BASE_URL}{imdb_id}"
     
-    # iOS Fix: Removed restrictive sandbox, added Apple web-app tags
+    # iOS Fix + Vertical Flexbox + Monetag Ad
     html_content = """
     <!DOCTYPE html>
     <html lang="en">
@@ -101,24 +105,59 @@ async def watch_movie(request):
         <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
         <title>AAKASH👑 Player</title>
         <style>
-            body, html { margin: 0; padding: 0; height: 100%; background-color: #000; overflow: hidden; font-family: sans-serif; }
-            .video-container { position: relative; width: 100%; height: 100%; }
+            body, html { 
+                margin: 0; padding: 0; height: 100%; width: 100%; 
+                background-color: #000; overflow: hidden; font-family: sans-serif; 
+                display: flex; flex-direction: column; 
+            }
+            
+            /* 1. TOP BANNER SPACE FOR MONETAG ADS */
+            .ad-container {
+                width: 100%;
+                min-height: 60px;
+                background-color: #111;
+                display: flex;
+                justify-content: center;
+                align-items: center;
+                z-index: 10;
+            }
+
+            /* 2. DYNAMIC VIDEO PLAYER SPACE */
+            .video-container {
+                flex: 1; 
+                position: relative;
+                width: 100%;
+            }
             iframe { width: 100%; height: 100%; border: none; }
+            
+            /* 3. ROTATION BUTTON */
             #rotate-btn {
-                position: fixed; top: 15px; right: 15px; z-index: 999;
+                position: fixed; bottom: 20px; right: 20px; z-index: 999;
                 background: rgba(255,255,255,0.2); color: white; padding: 10px;
                 border-radius: 5px; cursor: pointer; border: 1px solid rgba(255,255,255,0.3);
                 font-size: 12px; backdrop-filter: blur(5px);
             }
+
+            /* 4. FULLSCREEN LANDSCAPE MODE */
             .rotated { 
-                transform: rotate(90deg); transform-origin: bottom left;
-                position: absolute; top: -100vw; left: 0;
-                height: 100vw; width: 100vh;
+                position: fixed !important;
+                top: 0 !important; left: 0 !important;
+                width: 100vh !important; height: 100vw !important;
+                transform: rotate(90deg) !important;
+                transform-origin: top left !important;
+                margin-left: 100vw !important;
+                z-index: 100 !important; 
             }
         </style>
     </head>
     <body>
+        <!-- BANNER ADVERTISEMENT -->
+        <div class="ad-container">
+            <script src="https://quge5.com/88/tag.min.js" data-zone="239068" async data-cfasync="false"></script>
+        </div>
+
         <div id="rotate-btn" onclick="toggleRotation()">🔄 Rotate</div>
+        
         <div class="video-container" id="player-box">
             <iframe 
                 id="video-iframe"
@@ -326,7 +365,7 @@ async def start_handler(client, message):
     await message.reply_photo(photo=DEFAULT_POSTER, caption=welcome_text, reply_markup=ReplyKeyboardMarkup(kb, resize_keyboard=True))
 
 # =========================================================
-# UNIVERSAL TEXT HANDLER
+# UNIVERSAL TEXT HANDLER & ANTI-SPAM SEARCH
 # =========================================================
 @app.on_message(filters.private & filters.text & ~filters.command(["start", "broadcast", "stats", "ban", "unban", "admin", "reply", "addadmin", "deladmin"]))
 async def handle_text(client, message):
@@ -404,9 +443,20 @@ async def handle_text(client, message):
         )
         return await message.reply_text(admin_text)
 
-    # --- SEARCH TRIGGER ---
+    # --- SEARCH TRIGGER WITH ANTI-SPAM ---
     elif USER_STATE.get(user_id) == "SEARCHING" or (message.reply_to_message and message.reply_to_message.text and "Please type the movie name" in message.reply_to_message.text):
+        
+        # Check Spam Cooldown
+        now = datetime.utcnow()
+        last_time = LAST_SEARCH_TIME.get(user_id)
+        if last_time and (now - last_time).seconds < SEARCH_COOLDOWN:
+            wait_time = SEARCH_COOLDOWN - (now - last_time).seconds
+            return await message.reply_text(f"⚠️ **Please wait {wait_time}s before searching again!**")
+        
+        # Update timestamp and reset state
+        LAST_SEARCH_TIME[user_id] = now
         USER_STATE[user_id] = None 
+        
         movie_name = text
         status = await message.reply_text("🔍 Searching IMDb...")
         query = urllib.parse.quote(movie_name.lower().replace(" ", "_"))
