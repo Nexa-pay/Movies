@@ -21,7 +21,6 @@ from pyrogram.types import (
     KeyboardButton, 
     InlineKeyboardMarkup, 
     InlineKeyboardButton, 
-    WebAppInfo, 
     InputMediaPhoto, 
     BotCommand,
     ForceReply
@@ -423,7 +422,8 @@ async def cb_handler(client, query):
             await query.message.edit_media(
                 media=InputMediaPhoto(media=movie["poster"], caption=caption),
                 reply_markup=InlineKeyboardMarkup([
-                    [InlineKeyboardButton("🍿 Watch In-App", web_app=WebAppInfo(url=watch_url))],
+                    # Using a standard URL instead of web_app to ensure maximum compatibility!
+                    [InlineKeyboardButton("🍿 Watch Movie", url=watch_url)],
                     [InlineKeyboardButton("🔙 Close Menu", callback_data="close")]
                 ])
             )
