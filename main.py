@@ -64,15 +64,14 @@ async def init_db():
             logger.error(f"❌ DB Error: {e}")
 
 # =========================================================
-# SECURE PROXY PLAYER (iOS/iPad Fix + Monetag + Rotation)
+# SECURE PROXY PLAYER (Bulletproof HTML format)
 # =========================================================
 async def watch_movie(request):
     imdb_id = request.match_info.get("imdb_id")
+    movie_url = f"{STREAM_BASE_URL}{imdb_id}"
     
-    # --- Place your Monetag Ad Tag script below in ad_script once verified ---
-    ad_script = "" 
-    
-    html_content = f"""
+    # Using a standard string to avoid any Python f-string bracket crashes with JS/CSS
+    html_content = """
     <!DOCTYPE html>
     <html lang="en">
     <head>
@@ -80,22 +79,21 @@ async def watch_movie(request):
         <meta charset="UTF-8">
         <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
         <title>AAKASH👑 Player</title>
-        {ad_script}
         <style>
-            body, html {{ margin: 0; padding: 0; height: 100%; background-color: #000; overflow: hidden; font-family: sans-serif; }}
-            .video-container {{ position: relative; width: 100%; height: 100%; }}
-            iframe {{ width: 100%; height: 100%; border: none; }}
-            #rotate-btn {{
+            body, html { margin: 0; padding: 0; height: 100%; background-color: #000; overflow: hidden; font-family: sans-serif; }
+            .video-container { position: relative; width: 100%; height: 100%; }
+            iframe { width: 100%; height: 100%; border: none; }
+            #rotate-btn {
                 position: fixed; top: 15px; right: 15px; z-index: 999;
                 background: rgba(255,255,255,0.2); color: white; padding: 10px;
                 border-radius: 5px; cursor: pointer; border: 1px solid rgba(255,255,255,0.3);
                 font-size: 12px; backdrop-filter: blur(5px);
-            }}
-            .rotated {{ 
+            }
+            .rotated { 
                 transform: rotate(90deg); transform-origin: bottom left;
                 position: absolute; top: -100vw; left: 0;
                 height: 100vw; width: 100vh;
-            }}
+            }
         </style>
     </head>
     <body>
@@ -103,7 +101,7 @@ async def watch_movie(request):
         <div class="video-container" id="player-box">
             <iframe 
                 id="video-iframe"
-                src="{STREAM_BASE_URL}{imdb_id}" 
+                src="REPLACE_ME_URL" 
                 sandbox="allow-forms allow-scripts allow-pointer-lock allow-same-origin allow-top-navigation"
                 allow="autoplay; fullscreen; encrypted-media; picture-in-picture" 
                 allowfullscreen 
@@ -111,23 +109,23 @@ async def watch_movie(request):
             </iframe>
         </div>
         <script>
-            function toggleRotation() {{
+            function toggleRotation() {
                 var element = document.getElementById("player-box");
                 element.classList.toggle("rotated");
                 var btn = document.getElementById("rotate-btn");
                 btn.innerHTML = element.classList.contains("rotated") ? "🔙 Normal" : "🔄 Rotate";
-            }}
-            document.addEventListener('touchstart', function() {{}}, false);
+            }
+            document.addEventListener('touchstart', function() {}, false);
         </script>
     </body>
     </html>
-    """
+    """.replace("REPLACE_ME_URL", movie_url)
+    
     return web.Response(text=html_content, content_type="text/html")
 
 async def keep_alive():
     server = web.Application()
     server.router.add_get("/", lambda r: web.Response(text="Bot is Running!"))
-    # FIX: Correctly formatted the route string to single brackets
     server.router.add_get("/watch/{imdb_id}", watch_movie)
     runner = web.AppRunner(server)
     await runner.setup()
@@ -169,6 +167,7 @@ async def check_banned(user_id):
 @app.on_message(filters.command("stats") & filters.private)
 async def stats_cmd(client, message):
     if not await is_admin(message.from_user.id): return
+    if users_db is None: return await message.reply_text("❌ Database offline.")
     total = await users_db.count_documents({})
     banned = await users_db.count_documents({"is_banned": True})
     await message.reply_text(f"👥 **Stats:** Total {total} | Banned {banned}")
@@ -177,6 +176,7 @@ async def stats_cmd(client, message):
 async def broadcast_cmd(client, message):
     if not await is_admin(message.from_user.id): return
     if not message.reply_to_message: return await message.reply_text("❌ Reply to a message!")
+    if users_db is None: return
     msg = await message.reply_text("📢 Broadcasting...")
     s, f = 0, 0
     async for user in users_db.find({"is_banned": {"$ne": True}}):
@@ -193,8 +193,9 @@ async def ban_unban_cmd(client, message):
     args = message.text.split()
     if len(args) != 2: return await message.reply_text("Usage: `/ban UserID` or `/unban UserID`")
     action = True if "ban" in args[0] and "unban" not in args[0] else False
-    await users_db.update_one({"_id": int(args[1])}, {"$set": {"is_banned": action}})
-    await message.reply_text(f"✅ User {args[1]} {'banned' if action else 'unbanned'}.")
+    if users_db is not None:
+        await users_db.update_one({"_id": int(args[1])}, {"$set": {"is_banned": action}})
+        await message.reply_text(f"✅ User {args[1]} {'banned' if action else 'unbanned'}.")
 
 @app.on_message(filters.command("reply") & filters.private)
 async def reply_cmd(client, message):
@@ -281,7 +282,9 @@ async def handle_text(client, message):
         return await message.reply_text("🍿 **Type movie name:**", reply_markup=ForceReply(selective=True))
     
     elif "My Stats" in text:
+        if users_db is None: return
         u = await users_db.find_one({"_id": user_id})
+        if not u: return
         trial_end = u['join_date'] + timedelta(days=90)
         trial_text = "🟢 Active" if datetime.utcnow() < trial_end else "🔴 Expired"
         await message.reply_text(f"📊 **Stats:**\nTrial: {trial_text}\nCredits: {u['credits']}\nReferrals: {u['referrals']}\nWatched: {u['movies_watched']}")
@@ -297,9 +300,13 @@ async def handle_text(client, message):
         USER_STATE[user_id] = None
         status = await message.reply_text("🔍 Searching...")
         query = urllib.parse.quote(text.lower().replace(" ", "_"))
-        async with aiohttp.ClientSession() as session:
-            async with session.get(f"https://v3.sg.media-imdb.com/suggestion/{query[0]}/{query}.json") as resp:
-                results = (await resp.json()).get("d", []) if resp.status == 200 else []
+        try:
+            async with aiohttp.ClientSession() as session:
+                async with session.get(f"https://v3.sg.media-imdb.com/suggestion/{query[0]}/{query}.json") as resp:
+                    results = (await resp.json()).get("d", []) if resp.status == 200 else []
+        except Exception:
+            return await status.edit("❌ Error connecting to search API.")
+            
         if not results: return await status.edit("❌ No Results.")
         
         keyboard = []
@@ -331,13 +338,18 @@ async def cb_handler(client, query):
         return await query.answer("❌ Join first!", show_alert=True)
 
     if data.startswith("play_"):
+        if users_db is None: return await query.answer("Database Error", show_alert=True)
         u = await users_db.find_one({"_id": user_id})
+        
         if not await is_admin(user_id) and datetime.utcnow() > (u['join_date'] + timedelta(days=90)) and u['credits'] < 1:
             return await query.answer("❌ 0 Credits! Refer friends.", show_alert=True)
         
         imdb_id = data.split("_")[1]
         movie = MOVIE_DATA.get(imdb_id, {"title": "Movie", "poster": DEFAULT_POSTER})
-        await users_db.update_one({"_id": user_id}, {"$inc": {"movies_watched": 1, "credits": -1 if datetime.utcnow() > (u['join_date'] + timedelta(days=90)) else 0}})
+        
+        # Deduct credits if trial is over
+        deduction = -1 if datetime.utcnow() > (u['join_date'] + timedelta(days=90)) else 0
+        await users_db.update_one({"_id": user_id}, {"$inc": {"movies_watched": 1, "credits": deduction}})
         
         watch_url = f"{BASE_URL}/watch/{imdb_id}" if BASE_URL else f"{STREAM_BASE_URL}{imdb_id}"
         cap = f"🎥 **{movie['title']}**\n✨ Clean • No ADs • 4K\n🍿 Click below to watch!"
@@ -351,11 +363,21 @@ async def cb_handler(client, query):
 async def start_bot():
     await keep_alive()
     await init_db()
-    async with aiohttp.ClientSession() as s: await s.get(f"https://api.telegram.org/bot{BOT_TOKEN}/deleteWebhook?drop_pending_updates=true")
-    await app.start()
-    await app.set_bot_commands([BotCommand("start", "Main Menu")])
-    logger.info("✅ Bot is Online!")
-    await idle()
+    
+    # Bulletproof API connection block
+    try:
+        async with aiohttp.ClientSession() as s: 
+            await s.get(f"https://api.telegram.org/bot{BOT_TOKEN}/deleteWebhook?drop_pending_updates=true")
+    except Exception as e:
+        logger.warning(f"Webhook deletion skipped (Network timeout): {e}")
+
+    try:
+        await app.start()
+        await app.set_bot_commands([BotCommand("start", "Main Menu")])
+        logger.info("✅ Bot is Online and Ready!")
+        await idle()
+    except Exception as e:
+        logger.error(f"❌ Critical Error starting Pyrogram: {e}")
 
 if __name__ == "__main__":
     asyncio.get_event_loop().run_until_complete(start_bot())
